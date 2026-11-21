@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Roadster Ring 조종기</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0b0d; color: #fff; font-family: -apple-system, "Apple SD Gothic Neo", sans-serif;
+    touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; overscroll-behavior: none; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; }
+  #gate { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 24px; text-align: center; background: #0b0b0d; z-index: 2; }
+  #gate button { font-size: 20px; font-weight: 600; padding: 16px 36px; border-radius: 40px; border: 0; background: #e5362b; color: #fff; }
+  #gate p { margin: 0; line-height: 1.6; opacity: .85; } #msg { color: #ffb4a8; min-height: 1.4em; }
+</style>
+<script src="vendor/peerjs.min.js"></script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="gate">
+  <h2 style="margin:0">Roadster Ring 조종기</h2>
+  <p>아이폰을 <b>가로로</b> 양손으로 운전대처럼 잡은 뒤 누르세요.<br>누르는 순간의 자세가 운전대 가운데가 됩니다.</p>
+  <button id="go">시작</button>
+  <p id="msg"></p>
+</div>
+<script>
+// 조종값: steer -1..1(시계 방향 +), throttle, brake 0..1, mode 0/1/2, boost
+const st = { t: 'c', steer: 0, throttle: 0, brake: 0, mode: 1, boost: false, drift: false, auto: false };   // auto: 자동 페달(액셀 · 브레이크를 게임이 한다, 사용자 11/15)
+const game = { kmh: 0, gas: 1, soc: 1 };
+const opt = { rot: 0, invert: false, lock: 150 }; // rot: 화면을 돌려 그리는 각도(0/90/180/270), lock: 한쪽 끝까지 150° = 끝에서 끝 300° (사용자 지정, 11/12 에 360 → 300)
+let turned = 0;                                   // 가운데에서 돌린 각도(도). 180° 를 넘어도 이어서 센다
+let theta = null, base = 0, conn = null, status = '연결 중…';
+const isIOS = typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function';
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const msg = (t) => document.getElementById('msg').textContent = t;
+
+// ── 기울기 → 조향 ──
+// 중력이 기기 화면 평면에서 가리키는 방향으로, 세로로 세운 자세에서 시계 방향으로 몇 도 돌았는지를 잰다.
+// iOS 는 accelerationIncludingGravity 의 부호가 표준(안드로이드)과 반대다.
+addEventListener('devicemotion', (e) => {
+  const a = e.accelerationIncludingGravity; if (!a || a.x == null) return;
+  const k = isIOS ? 1 : -1, dx = a.x * k, dy = a.y * k;      // 기기 좌표에서 「아래」 방향
+  if (Math.hypot(dx, dy) < 2.5) return;                      // 거의 눕힌 자세에서는 각도가 불안정하다
+  const t = Math.atan2(dx, -dy) * 180 / Math.PI;
+  if (theta == null) { theta = t; return; }
+  const step = ((((t - theta) % 360) + 540) % 360 - 180) * 0.35;   // 떨림을 조금 누른다
+  theta += step; turned = Math.max(-210, Math.min(210, turned + step));
+  st.steer = Math.max(-1, Math.min(1, (opt.invert ? -turned : turned) / opt.lock));
+});
+function calibrate() {
+  if (theta == null) return;
+  base = theta; turned = 0;
+  // 화면을 어느 쪽으로 돌려 그릴지: 실제로 쥔 방향 − 브라우저가 이미 돌려 준 방향
+  const wo = typeof window.orientation === 'number' ? window.orientation : -(screen.orientation?.angle || 0);
+  const phys = Math.round((((theta % 360) + 540) % 360 - 180) / 90) * 90;
+  opt.rot = (((phys + wo) % 360) + 360) % 360;
+  layout();
+}
+
+// ── 화면 배치 (가로 기준 좌표 u, v) ──
+let W = 0, H = 0, LW = 0, LH = 0, B = {};
+function layout() {
+  const r = devicePixelRatio || 1; W = innerWidth; H = innerHeight; cv.width = W * r; cv.height = H * r;
+  const side = opt.rot % 180 !== 0; LW = side ? H : W; LH = side ? W : H;
+  const p = 14, colW = LW * 0.3, rx = LW - colW - p, bh = (LH * 0.5 - p * 2) / 3;
+  B = {
+    pedal: { x: p, y: p, w: LW * 0.38, h: LH - p * 2 },      // 왼손 자리: 왼쪽 절반 = 브레이크, 오른쪽 절반 = 액셀 (사용자 11/12)
+    modes: [0, 1, 2].map((i) => ({ x: rx, y: p + i * (bh + 6), w: colW, h: bh, i })),
+    boost: { x: rx, y: LH * 0.5 + p, w: colW, h: LH * 0.5 - p * 2 },
+    recal: { x: LW * 0.54 - 50, y: LH - 46, w: 100, h: 34 }, flip: { x: LW * 0.54 - 50, y: LH - 86, w: 100, h: 34 }, turn: { x: LW * 0.54 - 50, y: LH - 126, w: 100, h: 34 }, drift: { x: LW * 0.54 - 60, y: LH - 178, w: 120, h: 42 },
+    auto: { x: LW * 0.54 - 102, y: 6, w: 120, h: 34 }, pause: { x: LW * 0.54 + 26, y: 6, w: 76, h: 34 },
+  };
+}
+function toUI(x, y) { // 화면 좌표 → 가로 기준 좌표
+  const cx = x - W / 2, cy = y - H / 2; let u, v;
+  if (opt.rot === 90) [u, v] = [-cy, cx]; else if (opt.rot === 270) [u, v] = [cy, -cx]; else if (opt.rot === 180) [u, v] = [-cx, -cy]; else[u, v] = [cx, cy];
+  return [u + LW / 2, v + LH / 2];
+}
+const inside = (b, u, v) => u >= b.x && u <= b.x + b.w && v >= b.y && v <= b.y + b.h;
+
+// ── 터치 ──
+function touches(e) {
+  e.preventDefault();
+  let th = 0, br = 0, boost = false;
+  for (const t of e.touches) {
+    const [u, v] = toUI(t.clientX, t.clientY), P = B.pedal;
+    if (u < P.x + P.w + 8) {                                  // 왼손: 왼쪽 칸 = 브레이크, 오른쪽 칸 = 액셀. 가운데 높이부터 위는 전부 끝까지, 그 아래는 맨 밑 0 → 가운데 100% 로 세밀하게
+      const amt = Math.max(0, Math.min((P.y + P.h - v) / (P.h * 0.5), 1));
+      if (u < P.x + P.w / 2) br = Math.max(br, amt); else th = Math.max(th, amt);
+    } else if (inside(B.boost, u, v)) boost = true;
+  }
+  st.throttle = th; st.brake = br; st.boost = boost;
+  if (e.type === 'touchstart') for (const t of e.changedTouches) {
+    const [u, v] = toUI(t.clientX, t.clientY);
+    for (const m of B.modes) if (inside(m, u, v)) st.mode = m.i;
+    if (inside(B.recal, u, v)) calibrate();
+    if (inside(B.drift, u, v)) st.drift = !st.drift;
+    if (inside(B.pause, u, v)) st.pz = (st.pz || 0) + 1;   // 일시 정지 ↔ 계속 (누를 때마다 숫자가 오르고, 게임이 바뀐 걸 보고 뒤집는다 — 맥에서 Esc 로 멈춰도 엇갈리지 않게)
+    if (inside(B.auto, u, v)) st.auto = !(game.auto ?? st.auto);   // 맥에서 P 로 바꿨을 수도 있으니 게임 상태 기준으로 뒤집는다
+    if (inside(B.flip, u, v)) opt.invert = !opt.invert;
+    if (inside(B.turn, u, v)) { opt.rot = (opt.rot + 90) % 360; layout(); }
+  }
+}
+for (const ev of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) cv.addEventListener(ev, touches, { passive: false });
+
+// ── 그리기 ──
+function rr(b, fill, stroke) { ctx.beginPath(); ctx.roundRect(b.x, b.y, b.w, b.h, 14); if (fill) { ctx.fillStyle = fill; ctx.fill(); } if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke(); } }
+function label(t, x, y, size, color = '#fff', weight = 600) { ctx.fillStyle = color; ctx.font = `${weight} ${size}px -apple-system, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(t, x, y); }
+function draw() {
+  const r = devicePixelRatio || 1;
+  ctx.setTransform(r, 0, 0, r, 0, 0); ctx.fillStyle = '#0b0b0d'; ctx.fillRect(0, 0, W, H);
+  ctx.translate(W / 2, H / 2); ctx.rotate(-opt.rot * Math.PI / 180); ctx.translate(-LW / 2, -LH / 2);
+  const P = B.pedal, hw = P.w / 2 - 4, half = P.h * 0.5;
+  const bk = { x: P.x, y: P.y, w: hw, h: P.h }, ac = { x: P.x + P.w / 2 + 4, y: P.y, w: hw, h: P.h };
+  rr(bk, '#3a1512', '#d2392c'); rr(ac, '#12321d', '#2e9d57');
+  // 채워진 높이: 아래 절반이 0~100%, 위 절반은 끝까지 밟은 자리
+  ctx.fillStyle = 'rgba(240,70,55,.6)'; ctx.fillRect(bk.x, bk.y + (st.brake >= 1 ? 0 : P.h - half * st.brake), bk.w, st.brake >= 1 ? P.h : half * st.brake);
+  ctx.fillStyle = 'rgba(70,220,120,.55)'; ctx.fillRect(ac.x, ac.y + (st.throttle >= 1 ? 0 : P.h - half * st.throttle), ac.w, st.throttle >= 1 ? P.h : half * st.throttle);
+  ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.lineWidth = 1; ctx.setLineDash([6, 6]); ctx.beginPath(); ctx.moveTo(P.x, P.y + half); ctx.lineTo(P.x + P.w, P.y + half); ctx.stroke(); ctx.setLineDash([]);
+  label('브레이크', bk.x + bk.w / 2, P.y + 28, 18); label('액셀', ac.x + ac.w / 2, P.y + 28, 18);
+  label('끝까지', bk.x + bk.w / 2, P.y + half * 0.55, 13, '#ffb4a8', 500); label('끝까지', ac.x + ac.w / 2, P.y + half * 0.55, 13, '#9fe6b8', 500);
+  label('세밀하게', bk.x + bk.w / 2, P.y + half * 1.5, 13, '#ffb4a8', 500); label('세밀하게', ac.x + ac.w / 2, P.y + half * 1.5, 13, '#9fe6b8', 500);
+  const autoOn = game.auto ?? st.auto;
+  if (autoOn) { ctx.fillStyle = 'rgba(11,11,13,.7)'; ctx.fillRect(ac.x, ac.y, ac.w, ac.h); label('자동', ac.x + ac.w / 2, P.y + P.h * 0.5, 24, '#9fe6b8', 700); label('브레이크만 우선', bk.x + bk.w / 2, P.y + P.h - 22, 12, '#ffb4a8', 500); }
+  rr(B.auto, autoOn ? '#2e9d57' : '#1b1c20', autoOn ? '#7fe0a2' : '#3a3c42'); label(autoOn ? '자동 페달 켜짐' : '자동 페달', B.auto.x + B.auto.w / 2, B.auto.y + B.auto.h / 2, 15);
+  rr(B.pause, game.pause ? '#c9962a' : '#1b1c20', game.pause ? '#f0c04a' : '#3a3c42'); label(game.pause ? '계속' : '일시 정지', B.pause.x + B.pause.w / 2, B.pause.y + B.pause.h / 2, 14, game.pause ? '#111' : '#fff');
+  ['LOW DRAG', 'AUTO', 'HIGH DOWNFORCE'].forEach((n, i) => { const b = B.modes[i], on = st.mode === i; rr(b, on ? '#e5362b' : '#1b1c20', on ? '#ff7a6e' : '#3a3c42'); label(n, b.x + b.w / 2, b.y + b.h / 2, 15); });
+  const bo = B.boost; rr(bo, st.boost ? '#f0c04a' : '#3a2f12', '#c9a24a'); label('BOOST', bo.x + bo.w / 2, bo.y + bo.h / 2 - 8, 26, st.boost ? '#111' : '#f0c04a', 700);
+  label(game.gas > 0.01 ? Math.round(game.gas * 100) + '%' : 'EMPTY', bo.x + bo.w / 2, bo.y + bo.h / 2 + 22, 15, st.boost ? '#111' : '#c9a24a', 500);
+  // 가운데: 속도, 운전대 각도, 연결 상태
+  const mx = LW * 0.54;
+  label(String(game.kmh), mx, LH * 0.2, 54, '#fff', 700); label('km/h', mx, LH * 0.2 + 38, 14, '#888', 500);
+  ctx.save(); ctx.translate(mx, LH * 0.5); ctx.rotate(st.steer * opt.lock * Math.PI / 180);
+  ctx.strokeStyle = '#d9d8d2'; ctx.lineWidth = 7; ctx.beginPath(); ctx.roundRect(-46, -27, 92, 54, 16); ctx.stroke(); ctx.fillStyle = '#3a3c40'; ctx.fillRect(-12, -12, 24, 24); ctx.restore();
+  label(status, mx, LH * 0.5 + 50, 13, conn && conn.open ? '#5fd68a' : '#ffb4a8', 500);
+  rr(B.drift, st.drift ? '#e5362b' : '#1b1c20', st.drift ? '#ff7a6e' : '#3a3c42'); label(st.drift ? 'DRIFT' : 'GRIP', B.drift.x + B.drift.w / 2, B.drift.y + B.drift.h / 2, 17);
+  for (const [b, t] of [[B.turn, '화면 돌리기'], [B.recal, '가운데 맞춤'], [B.flip, opt.invert ? '조향 반대 ✓' : '조향 반대']]) { rr(b, '#1b1c20', '#3a3c42'); label(t, b.x + b.w / 2, b.y + b.h / 2, 13, '#bbb', 500); }
+  requestAnimationFrame(draw);
+}
+
+// ── 연결 ──
+function connect() {
+  const id = location.hash.slice(1);
+  if (!id) { status = '맥 화면의 QR 로 다시 열어 주세요'; return; }
+  const peer = new Peer();
+  peer.on('open', () => {
+    conn = peer.connect(id, { reliable: false });
+    conn.on('open', () => status = '연결됨');
+    conn.on('data', (d) => { if (d && d.t === 's') Object.assign(game, d); });
+    conn.on('close', () => { status = '끊김 — 다시 연결 중'; setTimeout(connect, 1000); });
+  });
+  peer.on('error', (e) => { status = '연결 오류: ' + (e.type || e); });
+}
+setInterval(() => { if (conn && conn.open) conn.send(st); }, 1000 / 60);
+
+document.getElementById('go').addEventListener('click', async () => {
+  try {
+    if (isIOS) { const r = await DeviceMotionEvent.requestPermission(); if (r !== 'granted') return msg('동작 센서 허용이 필요합니다. Safari 를 새로 열어 다시 시도하세요.'); }
+    else if (!window.isSecureContext) msg('https 가 아니라서 기울기 센서가 꺼져 있을 수 있습니다.');
+  } catch (e) { return msg('센서를 켜지 못했습니다: ' + e.message); }
+  try { await navigator.wakeLock?.request('screen'); } catch { /* 화면 꺼짐 방지는 없어도 된다 */ }
+  document.getElementById('gate').style.display = 'none';
+  layout(); setTimeout(calibrate, 250); connect(); draw();
+});
+addEventListener('resize', () => { layout(); });
+layout();
+window.__ctl = { st, opt, toUI, get B() { return B; }, calibrate, set theta(v) { theta = v; }, get LW() { return LW; } };
+</script>
+</body>
+</html>
