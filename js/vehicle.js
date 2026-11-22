@@ -24,7 +24,7 @@ export const SPEC = {
   A: 39.6 * LBF,            // 도로부하 (가정)
   B: 0.450 * LBF / MPH,
   C: 0.0168 * LBF / MPH ** 2 * (1.16 / 1.20),
-  fanG: 2.0, pFan: 100e3,   // 흡입 팬이 차 무게의 2배를 당긴다(아래 fanDown), 팬 전력 100 kW (가정)
+  fanKgf: 1800, pFan: 100e3,   // 흡입 팬 최대 다운포스(kgf, 아래 fanDown — 모든 트림 같음), 팬 전력 100 kW (가정)
   fanLag: 0.25,             // s, 팬이 도는 데 걸리는 시간 (게임)
   // 냉가스 추진기 = 요크의 BOOST 버튼
   thrustPeak: 85e3,         // N (공식 인터뷰 80~90 kN)
@@ -50,7 +50,8 @@ export const SPEC = {
 // 흡입 다운포스 = 차 무게 × 2 ≈ 4,100 kgf — 스펙: 라스 「바닥 팬이 최대 2 G 를 당긴다」 · 사이트 「서 있어도 거꾸로 붙어 있을 만큼」 · 램프 시연 계기판 최대 4,699 kg
 //   (dto_tesla_roadster_unveil/research/02-테크니컬-디테일.md §2 · §7). 사용자 11/15 「출발 흡입력도 스팩에 나온데로 한거 맞음?」 → 「스펙대로 바꿔」.
 //   전에는 「코너 2 G」로 읽어 (2.0 / 1.30 − 1) × 무게 ≈ 1,104 kgf (뉘르 랩 시뮬 lapsim.py 와 같은 해석)였다.
-SPEC.fanDown = SPEC.fanG * SPEC.massDry * G;
+//   → 11/21 지금 값은 아래 트림 설명의 1,800 kgf (모든 트림 같음).
+SPEC.fanDown = SPEC.fanKgf * G;
 
 // 트림 두 개 — 사용자 11/15 「게임에서 퍼포먼스트림이랑 쓰러스트 트림 두개중 선택할수있게 해야겠다」
 //   Performance: 뉘르 영상 시뮬(dto_tesla_roadster_unveil/research/nring/lapsim.py roadster())과 같은 1,700 + 운전자 80 = 1,780 kg, 추진기 없음
@@ -58,14 +59,16 @@ SPEC.fanDown = SPEC.fanG * SPEC.massDry * G;
 //   모터 · 기어 · 타이어는 같다. 흡입 팬: Performance 는 1,800 kgf — 뉘르 영상 시뮬의 958 kgf(= (2.0 / 1.30 − 1) × 1,780 kg, 「코너 2 G」 역산)로는
 //   게임(네 바퀴 모델 + 운전)이 시뮬 속도를 못 따라가(6:09.8, 전 구간 평균 −14 km/h) 사용자 11/15 「시뮬레이션 속도와 비슷하게 될수있도록 팬 다운포스를 조절하던 출력을 조정하던」 →
 //   1,400 · 1,600 · 1,800 kgf 를 자동 조향 + 자동 페달 100% 로 재 보고 1,800 에서 5:46.1(가드레일 0)이라 골랐다 (tools/physcheck/lap_sim.mjs FAN=…),
-//   Thrust 는 스펙대로 트림 무게 × 2. 사용자 11/15 랩 검증 뒤 「시뮬 958 kgf로」(Performance 만 물었다 — 스펙 흡입이면 랩이 영상 5:43.8 보다 훨씬 빨라져서)
+//   Thrust 는 전에 스펙대로 트림 무게 × 2(4,100 kgf)였다. 사용자 11/15 랩 검증 뒤 「시뮬 958 kgf로」(Performance 만 물었다 — 스펙 흡입이면 랩이 영상 5:43.8 보다 훨씬 빨라져서)
+//   11/21 사용자 「퍼포던 쓰러스트 던 로켓이던 팬스팩은 똑같으니 다 다운포스 최대량은 똑같지」 → 팬은 모든 트림이 SPEC.fanKgf(1,800 kgf) 하나.
+//   (Thrust 만 4,100 kgf 라 더 무거운데도 제동 3.8 G 로 Performance 2.6 G 보다 셌다)
 export const TRIMS = {
-  performance: { label: 'Performance', massDry: 1780, gasFull: 0, fanDown: 1800 * G },
+  performance: { label: 'Performance', massDry: 1780, gasFull: 0 },
   thrust: { label: 'Thrust', massDry: 2050, gasFull: 81 },
 };
 export function setTrim(name) {
   const key = TRIMS[name] ? name : 'thrust', t = TRIMS[key];
-  SPEC.trim = key; SPEC.massDry = t.massDry; SPEC.gasFull = t.gasFull; SPEC.fanDown = t.fanDown ?? SPEC.fanG * SPEC.massDry * G;
+  SPEC.trim = key; SPEC.massDry = t.massDry; SPEC.gasFull = t.gasFull; SPEC.fanDown = SPEC.fanKgf * G;
   return key;
 }
 SPEC.trim = 'thrust';
