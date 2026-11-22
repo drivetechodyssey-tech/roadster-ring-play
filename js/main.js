@@ -11,6 +11,7 @@ import { PhoneLink } from './link.js';
 import { AutoPedal } from './autopedal.js';
 import { simRef, ghostAt, LapTel, makeMinimap, drawTelemetry, loadBoard, saveLap, getDriver, setDriver, cleanName, boardHTML } from './laphud.js';
 import { boardOn, sendOn, setBoardUrl, submitLap, fetchBoard, WHY } from './online.js';
+import { isBad } from './badwords.js';
 import { makeForest } from './trees.js';
 import { buildGraffiti } from './graffiti.js';
 import { buildRoadWear } from './roadwear.js';
@@ -531,6 +532,7 @@ showDriverInfo();
 $('start').addEventListener('click', (e) => { if (e.target.closest('.driver')) return;
   const name = cleanName($('driverName').value);
   if (!name) { $('driverName').classList.add('need'); $('driverName').focus(); $('driverInfo').textContent = '드라이버 이름을 먼저 넣어 주세요'; return; }
+  if (isBad(name)) { $('driverName').classList.add('need'); $('driverName').focus(); $('driverInfo').textContent = '이 이름은 쓸 수 없어요 — 다른 이름을 넣어 주세요'; return; }   // 욕설 · 혐오 이름(사용자 11/21)
   driver = name; setDriver(name); $('driverName').value = name; $('driverName').blur();
   const b = e.target.closest('[data-trim]'); if (b) chooseTrim(b.dataset.trim);
   started = true; $('start').classList.add('hide'); try { if (!audio) startAudio(); } catch { /* 소리 없이 진행 */ } });   // !audio: 「트림 바꾸기」로 돌아와 다시 누를 때 소리가 두 겹이 되지 않게

@@ -39,7 +39,7 @@ export function fetchBoard(trim, n = 20) { return call(`?trim=${encodeURICompone
 
 // 서버가 안 받은 까닭 (Code.gs 의 why) · retry = 다시 보내기 단추를 보일지
 export const WHY = {
-  name: ['이름이 비어 있음', false], trim: ['모르는 트림', false], time: ['랩 시간이 받는 범위(4:30~1:00:00) 밖', false],
+  name: ['이름이 비어 있음', false], bad: ['기록판에 쓸 수 없는 이름 — 이름을 바꿔 주세요', false], trim: ['모르는 트림', false], time: ['랩 시간이 받는 범위(4:30~1:00:00) 밖', false],
   vmax: ['최고 속도가 받는 범위 밖', false], json: ['보낸 내용이 깨짐', true], busy: ['기록 서버가 바쁨', true],
   soon: ['같은 이름 · 기기로 3 분 안에 다시 보냄', false], limit: ['지금 기록이 몰림 — 1 분 뒤 다시', true], full: ['기록 보드가 가득 참', false],
 };
